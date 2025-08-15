@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
+import AuthPage from './components/AuthPage';
 
 // --- Type Definitions ---
 interface Seat {
@@ -6,6 +7,17 @@ interface Seat {
   number: string;
   isReserved: boolean;
   type: 'window' | 'aisle';
+  price: number;
+}
+
+interface User {
+    fullName: string;
+    email: string;
+}
+
+// Added Password to the User type for our local user list
+interface UserWithPassword extends User {
+    password: string;
 }
 
 interface ReservationDetails {
@@ -14,13 +26,7 @@ interface ReservationDetails {
     seatNumber: string;
 }
 
-interface ModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    children: React.ReactNode;
-}
-
-// --- Helper Components & Icons ---
+// --- Helper Components ---
 
 const SeatIcon: React.FC<{ className: string }> = ({ className }) => (
   <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
@@ -28,335 +34,249 @@ const SeatIcon: React.FC<{ className: string }> = ({ className }) => (
   </svg>
 );
 
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, children }) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center">
-      <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md m-4">
-        <div className="flex justify-end">
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-          </button>
+// --- Authentication Page Component ---
+
+
+
+
+// --- Reservation Page Component ---
+
+const ReservationPage: React.FC<{ user: User; onLogout: () => void }> = ({ user, onLogout }) => {
+    const [seats, setSeats] = useState<Seat[]>([]);
+    const [selectedSeat, setSelectedSeat] = useState<Seat | null>(null);
+    const [reservationDetails, setReservationDetails] = useState<ReservationDetails | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [pnrToCancel, setPnrToCancel] = useState('');
+    const [cancellationStatus, setCancellationStatus] = useState('');
+
+    const API_BASE_URL = 'http://localhost:8080/api';
+
+    useEffect(() => {
+        const fetchSeats = async () => {
+            setIsLoading(true);
+            try {
+                const response = await fetch(`${API_BASE_URL}/seats`);
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data: Seat[] = await response.json();
+                setSeats(data);
+            } catch (e: any) {
+                if (e instanceof TypeError && e.message === 'Failed to fetch') {
+                    setError('Connection to server failed. Please ensure your Java backend is running.');
+                } else {
+                    setError('An unexpected error occurred while fetching seat data.');
+                }
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchSeats();
+    }, []);
+
+    const handleSeatClick = (seat: Seat) => {
+        if (seat.isReserved) return;
+        setSelectedSeat(seat.id === selectedSeat?.id ? null : seat);
+    };
+
+    const handleReservation = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        if (!selectedSeat) return;
+        
+        setError('');
+        setIsLoading(true);
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/reservations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seatId: selectedSeat.id, passengerName: user.fullName }),
+            });
+
+            if (!response.ok) throw new Error('Reservation failed!');
+            
+            const newReservation = await response.json();
+
+            setReservationDetails({
+                pnr: newReservation.pnr,
+                seatNumber: selectedSeat.number,
+                passengerName: newReservation.passengerName
+            });
+            
+            setSeats(seats.map(s => s.id === selectedSeat.id ? { ...s, isReserved: true } : s));
+            setSelectedSeat(null);
+        } catch (err) {
+            setError('Failed to make a reservation. The seat might have been taken.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleCancellation = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        if (!pnrToCancel.trim()) {
+            setCancellationStatus('Please enter a PNR number.');
+            return;
+        }
+        setIsLoading(true);
+        setCancellationStatus('');
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/reservations/${pnrToCancel}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error('Cancellation failed. PNR not found.');
+            
+            const result = await response.json();
+            setCancellationStatus(result.message);
+
+            const seatResponse = await fetch(`${API_BASE_URL}/seats`);
+            const data: Seat[] = await seatResponse.json();
+            setSeats(data);
+            
+            if (reservationDetails?.pnr === pnrToCancel) setReservationDetails(null);
+            setPnrToCancel('');
+        } catch (err: any) {
+            setCancellationStatus(err.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="bg-gray-50 min-h-screen font-sans">
+            <header className="bg-white shadow-md">
+                <nav className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                    <h1 className="text-2xl font-bold text-blue-600">ExpressLine Reservations</h1>
+                    <div className="flex items-center space-x-4">
+                        <span className="text-gray-700">Welcome, {user.fullName}!</span>
+                        <button onClick={onLogout} className="bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition-colors">
+                            Logout
+                        </button>
+                    </div>
+                </nav>
+            </header>
+
+            <main className="container mx-auto p-4 sm:p-6 lg:p-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                        <h2 className="text-xl font-semibold mb-4 text-gray-800">Select Your Seat</h2>
+                        <div className="flex justify-around mb-4 text-sm text-gray-600">
+                            <div className="flex items-center"><SeatIcon className="w-5 h-5 text-blue-500 mr-2"/> Available</div>
+                            <div className="flex items-center"><SeatIcon className="w-5 h-5 text-green-500 mr-2"/> Selected</div>
+                            <div className="flex items-center"><SeatIcon className="w-5 h-5 text-gray-400 mr-2"/> Reserved</div>
+                        </div>
+                        <div className="p-4 bg-gray-100 rounded-lg">
+                            {isLoading && seats.length === 0 ? (
+                                <div className="flex justify-center items-center h-64">
+                                  <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                                </div>
+                            ) : error ? (
+                                <p className="text-center text-red-500 p-4">{error}</p>
+                            ) : (
+                                <div className="grid grid-cols-4 md:grid-cols-5 gap-2">
+                                    {seats.map((seat, index) => {
+                                        const isSelected = selectedSeat?.id === seat.id;
+                                        const seatClass = seat.isReserved ? 'text-gray-400 cursor-not-allowed' : isSelected ? 'text-green-500 cursor-pointer' : 'text-blue-500 hover:text-blue-700 cursor-pointer';
+                                        return (
+                                            <React.Fragment key={seat.id}>
+                                                <div onClick={() => handleSeatClick(seat)} className={`flex flex-col items-center justify-center p-1 rounded-lg transition-transform transform hover:scale-110 ${isSelected ? 'bg-green-100 border-2 border-green-500' : 'bg-gray-100'}`}>
+                                                    <SeatIcon className={`w-8 h-8 ${seatClass}`} />
+                                                    <span className="text-xs font-semibold text-gray-600">{seat.number}</span>
+                                                </div>
+                                                {(index + 1) % 4 === 2 && <div className="md:col-start-3"></div>}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="lg:col-span-1">
+                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                            {reservationDetails ? (
+                                <div>
+                                    <h2 className="text-xl font-semibold text-green-600 mb-4">Reservation Confirmed!</h2>
+                                    <div className="space-y-2 text-gray-700">
+                                        <p><strong>PNR:</strong> <span className="font-mono bg-gray-200 px-2 py-1 rounded">{reservationDetails.pnr}</span></p>
+                                        <p><strong>Passenger:</strong> {reservationDetails.passengerName}</p>
+                                        <p><strong>Seat:</strong> {reservationDetails.seatNumber}</p>
+                                    </div>
+                                    <button onClick={() => setReservationDetails(null)} className="w-full mt-4 bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors">
+                                        Book Another Seat
+                                    </button>
+                                </div>
+                            ) : selectedSeat ? (
+                                <div>
+                                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Confirm Reservation</h2>
+                                    <p className="text-gray-600 mb-4">You are booking seat <span className="font-bold">{selectedSeat.number}</span> for <span className="font-bold">{user.fullName}</span>.</p>
+                                    <form onSubmit={handleReservation}>
+                                        <button type="submit" disabled={isLoading} className="w-full bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition-colors disabled:bg-gray-400">
+                                            {isLoading ? 'Reserving...' : `Confirm for $${selectedSeat.price}`}
+                                        </button>
+                                    </form>
+                                </div>
+                            ) : (
+                                <div>
+                                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Your Booking</h2>
+                                    <p className="text-gray-600">Please select a seat from the map to begin your reservation.</p>
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="mt-8 bg-white p-6 rounded-xl shadow-lg">
+                            <h2 className="text-xl font-semibold text-gray-800 mb-4">Cancel Reservation</h2>
+                            <form onSubmit={handleCancellation}>
+                                <div className="mb-4">
+                                    <label htmlFor="pnr" className="block text-sm font-medium text-gray-700 mb-1">PNR Number</label>
+                                    <input type="text" id="pnr" value={pnrToCancel} onChange={e => setPnrToCancel(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-red-500 focus:border-red-500"/>
+                                </div>
+                                <button type="submit" disabled={isLoading} className="w-full bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition-colors disabled:bg-gray-400">
+                                    {isLoading ? 'Cancelling...' : 'Cancel Booking'}
+                                </button>
+                                {cancellationStatus && <p className={`text-sm mt-4 ${cancellationStatus.includes('success') ? 'text-green-600' : 'text-red-500'}`}>{cancellationStatus}</p>}
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </main>
         </div>
-        {children}
-      </div>
-    </div>
-  );
+    );
 };
 
-// --- Main Application ---
 
+// --- Main App Component ---
 const App: React.FC = () => {
-  // --- State Management ---
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-  const [seats, setSeats] = useState<Seat[]>([]);
-  const [selectedSeat, setSelectedSeat] = useState<Seat | null>(null);
-  const [reservationDetails, setReservationDetails] = useState<ReservationDetails | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [pnrToCancel, setPnrToCancel] = useState('');
-  const [cancellationStatus, setCancellationStatus] = useState('');
+    const [user, setUser] = useState<User | null>(null);
+    // This state will act as our temporary user database
+    const [users, setUsers] = useState<UserWithPassword[]>([
+        // Pre-populate with the test user
+        { fullName: 'Test User', email: 'test@example.com', password: 'password123' }
+    ]);
 
-  // --- Mock API Calls ---
-  const fetch = useMemo(() => ({
-    getSeats: async (): Promise<Seat[]> => {
-      console.log("API: Fetching seats...");
-      await new Promise(res => setTimeout(res, 500));
-      if (seats.length === 0) {
-        return Array.from({ length: 40 }, (_, i) => ({
-          id: i + 1,
-          number: `${Math.floor(i / 4) + 1}${String.fromCharCode(65 + (i % 4))}`,
-          isReserved: Math.random() > 0.7,
-          type: (i % 4 === 0 || i % 4 === 3) ? 'window' : 'aisle',
-        }));
-      }
-      return seats;
-    },
-    login: async (username: string, password: string): Promise<{ success: boolean; message?: string }> => {
-      console.log("API: Attempting login...");
-      await new Promise(res => setTimeout(res, 500));
-      if (username === 'admin' && password === 'admin123') {
-        return { success: true };
-      }
-      return { success: false, message: 'Invalid credentials.' };
-    },
-    makeReservation: async (seat: Seat, passengerName: string): Promise<{ success: boolean; pnr?: string; seatNumber?: string; passengerName?: string }> => {
-      console.log(`API: Reserving seat ${seat.number} for ${passengerName}`);
-      await new Promise(res => setTimeout(res, 1000));
-      const pnr = `PNR${Date.now()}`;
-      const updatedSeats = seats.map(s => s.id === seat.id ? { ...s, isReserved: true } : s);
-      setSeats(updatedSeats);
-      return { success: true, pnr, seatNumber: seat.number, passengerName };
-    },
-    cancelReservation: async (pnr: string): Promise<{ success: boolean; message: string }> => {
-        console.log(`API: Cancelling reservation with PNR ${pnr}`);
-        await new Promise(res => setTimeout(res, 1000));
-        if (reservationDetails && reservationDetails.pnr === pnr) {
-            const updatedSeats = seats.map(s => s.number === reservationDetails.seatNumber ? { ...s, isReserved: false } : s);
-            setSeats(updatedSeats);
-            setReservationDetails(null);
-            setSelectedSeat(null);
-            return { success: true, message: `Reservation ${pnr} cancelled successfully.` };
-        }
-        return { success: false, message: `No active reservation found for PNR ${pnr}.` };
-    }
-  }), [seats, reservationDetails]);
-
-
-  // --- Effects ---
- // --- New CODE ---
-useEffect(() => {
-    const fetchSeats = async () => {
-      setIsLoading(true);
-      try {
-        // Yeh ab aapke Java backend se data laayega!
-        const response = await fetch('http://localhost:8080/api/seats'); 
-        const data = await response.json();
-        setSeats(data);
-      } catch (e) {
-        setError('Data is not coming from server.');
-      } finally {
-        setIsLoading(false);
-      }
+    const handleLoginSuccess = (loggedInUser: User) => {
+        setUser(loggedInUser);
     };
-    fetchSeats();
-}, []); // Left it empty so that it can run once 
-    fetchSeats();
-  }, []); // Removed fetch from dependency array to prevent re-fetching
 
-  // --- Event Handlers ---
-  const handleSeatClick = (seat: Seat) => {
-    if (seat.isReserved) return;
-    if (!isLoggedIn) {
-        setIsLoginModalOpen(true);
-        return;
-    }
-    setSelectedSeat(seat.id === selectedSeat?.id ? null : seat);
-  };
-
-  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const target = e.target as typeof e.target & {
-        username: { value: string };
-        password: { value: string };
+    const handleLogout = () => {
+        setUser(null);
     };
-    const username = target.username.value;
-    const password = target.password.value;
-    
-    setError('');
-    const result = await fetch.login(username, password);
-    if (result.success) {
-      setIsLoggedIn(true);
-      setIsLoginModalOpen(false);
-    } else {
-      setError(result.message || 'An unknown error occurred.');
-    }
-  };
-  
-  const handleLogout = () => {
-      setIsLoggedIn(false);
-      setSelectedSeat(null);
-      setReservationDetails(null);
-  };
 
-  const handleReservation = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedSeat) return;
-
-    const target = e.target as typeof e.target & {
-        passengerName: { value: string };
+    const handleAddUser = (newUser: UserWithPassword) => {
+        setUsers(prevUsers => [...prevUsers, newUser]);
     };
-    const passengerName = target.passengerName.value;
 
-    if (!passengerName.trim()) {
-      setError('Passenger name is required.');
-      return;
-    }
-    setError('');
-    setIsLoading(true);
-    const result = await fetch.makeReservation(selectedSeat, passengerName);
-    setIsLoading(false);
-    if (result.success && result.pnr && result.seatNumber && result.passengerName) {
-      setReservationDetails({
-          pnr: result.pnr,
-          seatNumber: result.seatNumber,
-          passengerName: result.passengerName
-      });
-      setSelectedSeat(null); // Clear selection after booking
-    } else {
-      setError('Failed to make a reservation.');
-    }
-  };
-
-  const handleCancellation = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!pnrToCancel.trim()) {
-        setCancellationStatus('Please enter a PNR number.');
-        return;
-    }
-    setIsLoading(true);
-    setCancellationStatus('');
-    const result = await fetch.cancelReservation(pnrToCancel);
-    setIsLoading(false);
-    setCancellationStatus(result.message);
-    if(result.success) setPnrToCancel('');
-  };
-
-
-  // --- Render Logic ---
-  const renderSeats = () => {
-    if (isLoading) {
-      return (
-        <div className="flex justify-center items-center h-64">
-          <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
-        </div>
-      );
-    }
     return (
-      <div className="grid grid-cols-4 md:grid-cols-5 gap-2">
-        {seats.map((seat, index) => {
-          const isSelected = selectedSeat?.id === seat.id;
-          const seatClass = seat.isReserved
-            ? 'text-gray-400 cursor-not-allowed'
-            : isSelected
-            ? 'text-green-500 cursor-pointer'
-            : 'text-blue-500 hover:text-blue-700 cursor-pointer';
-
-          return (
-            <React.Fragment key={seat.id}>
-              <div
-                onClick={() => handleSeatClick(seat)}
-                className={`flex flex-col items-center justify-center p-1 rounded-lg transition-transform transform hover:scale-110 ${isSelected ? 'bg-green-100 border-2 border-green-500' : 'bg-gray-100'}`}
-              >
-                <SeatIcon className={`w-8 h-8 ${seatClass}`} />
-                <span className="text-xs font-semibold text-gray-600">{seat.number}</span>
-              </div>
-              {(index + 1) % 4 === 2 && <div className="md:col-start-3"></div>}
-            </React.Fragment>
-          );
-        })}
-      </div>
-    );
-  };
-
-  return (
-    <div className="bg-gray-50 min-h-screen font-sans">
-      <header className="bg-white shadow-md">
-        <nav className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-blue-600">ExpressLine Reservations</h1>
-          <div>
-            {isLoggedIn ? (
-              <button onClick={handleLogout} className="bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition-colors">
-                Logout
-              </button>
+        <div>
+            {user ? (
+                <ReservationPage user={user} onLogout={handleLogout} />
             ) : (
-              <button onClick={() => setIsLoginModalOpen(true)} className="bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors">
-                Login
-              </button>
+                <AuthPage 
+                    onLoginSuccess={handleLoginSuccess} 
+                    users={users} 
+                    addUser={handleAddUser} 
+                />
             )}
-          </div>
-        </nav>
-      </header>
-
-      <main className="container mx-auto p-4 sm:p-6 lg:p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left/Main Column: Seat Map */}
-          <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">Select Your Seat</h2>
-            <div className="flex justify-around mb-4 text-sm text-gray-600">
-                <div className="flex items-center"><SeatIcon className="w-5 h-5 text-blue-500 mr-2"/> Available</div>
-                <div className="flex items-center"><SeatIcon className="w-5 h-5 text-green-500 mr-2"/> Selected</div>
-                <div className="flex items-center"><SeatIcon className="w-5 h-5 text-gray-400 mr-2"/> Reserved</div>
-            </div>
-            <div className="p-4 bg-gray-100 rounded-lg">
-              {renderSeats()}
-            </div>
-          </div>
-
-          {/* Right Column: Reservation/Cancellation Panel */}
-          <div className="lg:col-span-1">
-            <div className="bg-white p-6 rounded-xl shadow-lg">
-              {reservationDetails ? (
-                <div>
-                    <h2 className="text-xl font-semibold text-green-600 mb-4">Reservation Confirmed!</h2>
-                    <div className="space-y-2 text-gray-700">
-                        <p><strong>PNR:</strong> <span className="font-mono bg-gray-200 px-2 py-1 rounded">{reservationDetails.pnr}</span></p>
-                        <p><strong>Passenger:</strong> {reservationDetails.passengerName}</p>
-                        <p><strong>Seat:</strong> {reservationDetails.seatNumber}</p>
-                    </div>
-                    <button onClick={() => setReservationDetails(null)} className="w-full mt-4 bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors">
-                        Book Another Seat
-                    </button>
-                </div>
-              ) : selectedSeat ? (
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-800 mb-4">Reserve Seat {selectedSeat.number}</h2>
-                  <form onSubmit={handleReservation}>
-                    <div className="mb-4">
-                      <label htmlFor="passengerName" className="block text-sm font-medium text-gray-700 mb-1">Passenger Name</label>
-                      <input type="text" id="passengerName" name="passengerName" required className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"/>
-                    </div>
-                    {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
-                    <button type="submit" disabled={isLoading} className="w-full bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition-colors disabled:bg-gray-400">
-                      {isLoading ? 'Reserving...' : `Confirm Reservation ($${selectedSeat.type === 'window' ? 50 : 45})`}
-                    </button>
-                  </form>
-                </div>
-              ) : (
-                 <div>
-                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Your Booking</h2>
-                    <p className="text-gray-600">Please select a seat from the map to begin your reservation.</p>
-                 </div>
-              )}
-            </div>
-            
-            {isLoggedIn && (
-            <div className="mt-8 bg-white p-6 rounded-xl shadow-lg">
-                <h2 className="text-xl font-semibold text-gray-800 mb-4">Cancel Reservation</h2>
-                <form onSubmit={handleCancellation}>
-                    <div className="mb-4">
-                        <label htmlFor="pnr" className="block text-sm font-medium text-gray-700 mb-1">PNR Number</label>
-                        <input type="text" id="pnr" value={pnrToCancel} onChange={e => setPnrToCancel(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-red-500 focus:border-red-500"/>
-                    </div>
-                    <button type="submit" disabled={isLoading} className="w-full bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition-colors disabled:bg-gray-400">
-                        {isLoading ? 'Cancelling...' : 'Cancel Booking'}
-                    </button>
-                    {cancellationStatus && <p className={`text-sm mt-4 ${cancellationStatus.includes('success') ? 'text-green-600' : 'text-red-500'}`}>{cancellationStatus}</p>}
-                </form>
-            </div>
-            )}
-
-          </div>
         </div>
-      </main>
-
-      <Modal isOpen={isLoginModalOpen} onClose={() => setIsLoginModalOpen(false)}>
-        <h2 className="text-2xl font-bold text-center mb-4 text-gray-800">Login Required</h2>
-        <p className="text-center text-gray-600 mb-6">You need to be logged in to reserve a seat.</p>
-        <form onSubmit={handleLogin}>
-          <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="username">
-              Username
-            </label>
-            <input className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" id="username" type="text" placeholder="admin" defaultValue="admin"/>
-          </div>
-          <div className="mb-6">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="password">
-              Password
-            </label>
-            <input className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline" id="password" type="password" placeholder="******************" defaultValue="admin123"/>
-          </div>
-           {error && <p className="text-red-500 text-xs italic mb-4">{error}</p>}
-          <div className="flex items-center justify-center">
-            <button className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline" type="submit">
-              Sign In
-            </button>
-          </div>
-        </form>
-      </Modal>
-    </div>
-  );
+    );
 };
 
 export default App;
